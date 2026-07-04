@@ -335,6 +335,8 @@ def approximate_in_ht(u: np.ndarray, error: float) -> str:
 
         power_gates(M1_STR, k) + power_gates(M2_STR, l) + power_gates(M1_STR, m).
     """
+    M1_STR=''
+    M2_STR=''
     b=decompose_2x2(u,error)
     sring=power_gates(M1_STR,b.k)+power_gates(M2_STR,b.l)+power_gates(M1_STR,b.m)
     # TODO: implement using decompose_2x2 and power_gates.
