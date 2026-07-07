@@ -28,27 +28,37 @@ class Bloch:
     
    
 def to_bloch(g: np.ndarray) -> Bloch:
-    """Recover the Bloch form (alpha, n, theta) of a 2x2 unitary `g`."""
-    sigma = np.array([
-    [[0, 1], [1, 0]],       
-    [[0, -1j], [1j, 0]], 
-    [[1, 0], [0, -1]]       
-    ], dtype=DTYPE)
-    n: np.ndarray
-    
+    """Recover Bloch form of 2x2 unitary g."""
+
+    g = np.asarray(g, dtype=DTYPE)
 
     det_g = np.linalg.det(g)
-    alpha= float(0.5 * np.angle(det_g))
-    theta=float(2 * np.arccos(0.5 * np.trace(g/alpha)).real)
-    g_dash=g* np.exp(-1j* alpha)
-    if np.isclose(np.sin(theta/2), 0.0):
+    alpha = float(0.5 * np.angle(det_g))
+
+    # Remove global phase
+    g_dash = np.exp(-1j * alpha) * g
+
+    tr = np.trace(g_dash)
+    cos_half_theta = np.clip((0.5 * tr).real, -1.0, 1.0)
+
+    theta = float(2 * np.arccos(cos_half_theta))
+
+    s = np.sin(theta / 2)
+
+    if np.isclose(s, 0.0):
         n = np.array([0.0, 0.0, 1.0], dtype=float)
     else:
-        n_x=0.5j*np.trace(sigma[0]@g_dash)/np.sin(theta/2)
-        n_y=0.5j*np.trace(sigma[1]@g_dash)/np.sin(theta/2)
-        n_z=0.5j*np.trace(sigma[2]@g_dash)/np.sin(theta/2)
+        n_x = (0.5j * np.trace(sigma[0] @ g_dash) / s).real
+        n_y = (0.5j * np.trace(sigma[1] @ g_dash) / s).real
+        n_z = (0.5j * np.trace(sigma[2] @ g_dash) / s).real
+
         n = np.array([n_x, n_y, n_z], dtype=float)
-    return Bloch(alpha,n,theta)
+
+        norm = np.linalg.norm(n)
+        if not np.isclose(norm, 0.0):
+            n = n / norm
+
+    return Bloch(alpha, n, theta)
 
 
 # n1, n2 are two orthogonal Bloch-sphere axes (n1 . n2 == 0)
@@ -66,31 +76,33 @@ a3 = np.cross(a1, a2)
 
 
 def n1n2n1_angles(b: Bloch) -> tuple[float, float, float, float]:
-    """Factor the rotation part of a unitary (given as its Bloch form `b`) as
-        u = e^{i global_phase} * Rn1(alpha) * Rn2(beta) * Rn1(gamma)
+    """Factor Bloch rotation into Rn1(alpha) Rn2(beta) Rn1(gamma)."""
 
-    where Ra(angle) is a rotation by `angle` about axis a, and {a1, a2, a3} is
-    the orthonormal frame defined above. Returns (alpha, beta, gamma, global_phase).
-    """
-    # TODO(student): implement using the steps above.
-    global_phase=b.alpha
-    # z=np.sin(beta)*np.sin(gama-alpha)
-    # y=np.sin(beta)*np.cos(gama-alpha)
-    # x=np.cos(beta)*np.sin(gama+alpha)
-    # w=np.cos(beta)*np.cos(gama+alpha)
-    w=np.cos(b.theta/2)
-    x=np.sin(b.theta/2)*np.dot(b.n,a1)
-    y=np.sin(b.theta/2)*np.dot(b.n,a2)
-    z=np.sin(b.theta/2)*np.dot(b.n,a3)
-   # gama-alpha=np.arctan2(z/y)
-   # gama + alpha= np.arctan2(x/w)
-    gama= 0.5*(np.arctan2(z,y)+np.arctan2(x,w))
-    alpha= 0.5*(-np.arctan2(z,y)+np.arctan2(x,w))
-    beta=np.arcsin(z/np.sin(gama-alpha))
+    global_phase = b.alpha
+
+    w = np.cos(b.theta / 2)
+    x = np.sin(b.theta / 2) * np.dot(b.n, a1)
+    y = np.sin(b.theta / 2) * np.dot(b.n, a2)
+    z = np.sin(b.theta / 2) * np.dot(b.n, a3)
+
+    p = np.arctan2(z, y)  # gamma - alpha
+    q = np.arctan2(x, w)  # gamma + alpha
+
+    gamma = 0.5 * (p + q)
+    alpha = 0.5 * (q - p)
+
+    # Much safer than beta = arcsin(z / sin(...))
+    beta = np.arctan2(
+        np.sqrt(y * y + z * z),
+        np.sqrt(w * w + x * x),
+    )
+
     alpha = float(np.mod(alpha, TWO_PI))
     beta = float(np.mod(beta, TWO_PI))
-    gamma = float(np.mod(gama, TWO_PI))
-    return(alpha,beta,gamma,global_phase)
+    gamma = float(np.mod(gamma, TWO_PI))
+
+    return alpha, beta, gamma, global_phase
+
 
 
 def approx_angle_with_tolerance(angle: float, tolerance: float) -> int:
@@ -161,98 +173,116 @@ def decompose_2x2(u: np.ndarray, tolerance: float) -> tuple[int, int, int]:
     return(k,l,m)
     # TODO(student): implement using the steps above.
     raise NotImplementedError("decompose_2x2 is not implemented yet")
-sigma = np.array([
-    [[0, 1], [1, 0]],       
-    [[0, -1j], [1j, 0]], 
-    [[1, 0], [0, -1]]       
-    ], dtype=DTYPE)
+
+sigma = np.array(
+    [
+        [[0, 1], [1, 0]],
+        [[0, -1j], [1j, 0]],
+        [[1, 0], [0, -1]],
+    ],
+    dtype=DTYPE,
+)
+
 def from_axis_angle(b: Bloch) -> np.ndarray:
-    """Build a 2x2 unitary from its Bloch form: a global phase times a rotation
-    by angle b.theta about axis b.n (inverse of to_bloch).
+    """Build 2x2 unitary from Bloch form."""
 
-        G = e^{i b.alpha} (cos(b.theta/2) I - i sin(b.theta/2) (b.n . sigma))
+    n_dot_sigma = (
+        b.n[0] * sigma[0]
+        + b.n[1] * sigma[1]
+        + b.n[2] * sigma[2]
+    )
 
-    where (b.n . sigma) = n_x X + n_y Y + n_z Z. Assumes b.n is a unit vector.
-    """
-   
-    G=np.exp(1j*b.alpha)*(np.cos(0.5*b.theta)*np.eye-1j*np.sin(0.5*b.theta)*np.dot(b.n,sigma))
-    return G
-    # TODO: implement using the formula above.
-    raise NotImplementedError("from_axis_angle is not implemented yet")
-
+    return np.exp(1j * b.alpha) * (
+        np.cos(b.theta / 2) * np.eye(2, dtype=DTYPE)
+        - 1j * np.sin(b.theta / 2) * n_dot_sigma
+    )
 
 def Rz(theta: float) -> np.ndarray:
-    """Rotation about the z axis (no global phase):
-
-    Rz(theta) = diag(e^{-i theta/2}, e^{i theta/2}).
-    """
-    R_z=np.array([np.exp(-1j*theta),0],[0,np.exp(1j*theta)], dtype=DTYPE)
-    return R_z
-    # TODO: implement (hint: from_axis_angle about axis [0, 0, 1]).
-    raise NotImplementedError("Rz is not implemented yet")
+    return np.array(
+        [
+            [np.exp(-1j * theta / 2), 0],
+            [0, np.exp(1j * theta / 2)],
+        ],
+        dtype=complex,
+    )
 
 
 def Ry(theta: float) -> np.ndarray:
-    """Rotation about the y axis (no global phase):
+    return np.array(
+        [
+            [np.cos(theta / 2), -np.sin(theta / 2)],
+            [np.sin(theta / 2), np.cos(theta / 2)],
+        ],
+        dtype=complex,
+    )
 
-    Ry(theta) = [[cos(theta/2), -sin(theta/2)], [sin(theta/2), cos(theta/2)]].
+
+
+def euler_angles_zyz(u: np.ndarray):
+    """Return alpha, beta, gamma, delta such that
+
+        U = exp(i alpha) Rz(beta) Ry(gamma) Rz(delta)
+
+    for a 2x2 unitary U.
     """
-    R_y=np.array([np.cos(0.5*theta),-np.sin(0.5*theta)],[np.sin(0.5*theta),np.cos(0.5*theta)],dtype=DTYPE)
-    return R_y
-    # TODO: implement (hint: from_axis_angle about axis [0, 1, 0]).
-    raise NotImplementedError("Ry is not implemented yet")
 
+    u = np.asarray(u, dtype=complex)
 
-def euler_angles_zyz(u: np.ndarray) -> tuple[float, float, float, float]:
-    """ZYZ Euler decomposition of a 2x2 unitary: angles (alpha, beta, gamma, delta)
-    with
+    if u.shape != (2, 2):
+        raise ValueError("u must be 2x2")
 
-        u = e^{i alpha} Rz(beta) Ry(gamma) Rz(delta).
+    det_u = np.linalg.det(u)
+    alpha = 0.5 * np.angle(det_u)
 
-    alpha is the global phase (arg(det u)/2); the rest come from S = e^{-i alpha} u
-    in SU(2), where s00 = cos(gamma/2) e^{-i(beta+delta)/2} and
-    s10 = sin(gamma/2) e^{i(beta-delta)/2}. When gamma = 0 (s10 = 0), beta/delta are
-    split arbitrarily (gimbal lock); the identity still holds.
-    """
-    z=np.array(0,0,-1)
-    y=np.array(0,-1,0)
-    z_y=np.cross(a1,a2)
-    b=to_bloch(u)
-    global_phase=b.alpha
-    # z=np.sin(beta)*np.sin(gama-alpha)
-    # y=np.sin(beta)*np.cos(gama-alpha)
-    # x=np.cos(beta)*np.sin(gama+alpha)
-    # w=np.cos(beta)*np.cos(gama+alpha)
-    w=np.cos(b.theta/2)
-    x=np.sin(b.theta/2)*np.dot(b.n,z)
-    y=np.sin(b.theta/2)*np.dot(b.n,y)
-    z=np.sin(b.theta/2)*np.dot(b.n,z_y)
-   # gama-alpha=np.arctan2(z/y)
-   # gama + alpha= np.arctan2(x/w)
-    gama= 0.5*(np.arctan2(z,y)+np.arctan2(x,w))
-    alpha= 0.5*(-np.arctan2(z,y)+np.arctan2(x,w))
-    beta=np.arcsin(z/np.sin(gama-alpha))
-    alpha = float(np.mod(alpha, TWO_PI))
-    beta = float(np.mod(beta, TWO_PI))
-    gamma = float(np.mod(gama, TWO_PI))
-    return(global_phase,alpha,beta,gamma)
-    # TODO: implement using the relations above.
-    raise NotImplementedError("euler_angles_zyz is not implemented yet")
+    # Remove global phase.
+    su = np.exp(-1j * alpha) * u
+
+    a = su[0, 0]
+    b = su[0, 1]
+
+    cos_half_gamma = np.clip(abs(a), 0.0, 1.0)
+    gamma = 2 * np.arccos(cos_half_gamma)
+
+    # Special case: gamma approximately 0
+    if np.isclose(np.sin(gamma / 2), 0.0, atol=1e-12):
+        beta = -2 * np.angle(a)
+        delta = 0.0
+
+    # Special case: gamma approximately pi
+    elif np.isclose(np.cos(gamma / 2), 0.0, atol=1e-12):
+        beta = -2 * np.angle(-b)
+        delta = 0.0
+
+    else:
+        # su[0,0] = exp(-i(beta+delta)/2) cos(gamma/2)
+        # su[0,1] = -exp(-i(beta-delta)/2) sin(gamma/2)
+        p = -2 * np.angle(a)       # beta + delta
+        m = -2 * np.angle(-b)      # beta - delta
+
+        beta = 0.5 * (p + m)
+        delta = 0.5 * (p - m)
+
+    return alpha, beta, gamma, delta
+
 
 
 def unitary2_sqrt(u: np.ndarray) -> np.ndarray:
-    """Principal square root: a 2x2 unitary V with V @ V == u, phase included.
-    Take the Bloch form of u and halve both alpha and theta (same axis); squaring
-    back doubles them, reproducing u exactly.
-    G = e^{i b.alpha} (cos(b.theta/2) I - i sin(b.theta/2) (b.n . sigma))
+    """Matrix square root of a 2x2 unitary.
+
+    Returns V such that V @ V ≈ u.
     """
-    b=to_bloch(u)
-    V_alpha=0.5*b.alpha
-    V_theta=0.5*b.theta
-    v=np.exp(1j*V_alpha)*np.cos(0.5*V_theta)*np.eye-1j*np.sin(0.5*V_theta)*(np.dot(b.n,sigma))
-    return v
-    # TODO: implement (hint: to_bloch, halve alpha and theta, from_axis_angle).
-    raise NotImplementedError("unitary2_sqrt is not implemented yet")
+
+    u = np.asarray(u, dtype=complex)
+
+    if u.shape != (2, 2):
+        raise ValueError("u must be 2x2")
+
+    eigvals, eigvecs = np.linalg.eig(u)
+
+    sqrt_diag = np.diag(np.sqrt(eigvals))
+
+    return eigvecs @ sqrt_diag @ np.linalg.inv(eigvecs)
+
 
 
 # ---------------------------------------------------------------------------
@@ -268,19 +298,19 @@ M1_WORD = [7, 1, 1, 1]
 M2_WORD = [2, 1, 1, 1, 6, 1, 7, 1, 5, 1, 1, 1, 2, 1, 1, 1, 2, 1, 7, 1, 6]
 
 
+
 def expand_word(word: list[int]) -> str:
-    """Flatten an alternating (T-power, H-power, ...) exponent list into a literal
-    string of 'H'/'T' gates (left-to-right). Even indices are T, odd indices are H.
-    """
-    T="T"
-    H="H"
-    string=""
-    for i in range(len(word)):
-        if(i%2==0):
-            string=string+T*word[i]
+    """Flatten alternating T-power, H-power exponents."""
+
+    result = ""
+
+    for i, power in enumerate(word):
+        if i % 2 == 0:
+            result += "T" * power
         else:
-            string=string+H*word[i]
-    return string
+            result += "H" * power
+
+    return result
     # TODO: implement.
     raise NotImplementedError("expand_word is not implemented yet")
 
@@ -288,56 +318,138 @@ def expand_word(word: list[int]) -> str:
 # M1_STR = expand_word(M1_WORD)
 # M2_STR = expand_word(M2_WORD)
 
+M1_STR = expand_word(M1_WORD)
+M2_STR = expand_word(M2_WORD)
+
 
 def gates_to_unitary(gates: str) -> np.ndarray:
-    """The 2x2 unitary of a flat H/T gate string (left-to-right product)."""
-    T=np.array([[1,0],[0,np.exp(0.25j*np.pi)]],dtype=DTYPE)
-    aray=np.array([[1,0],[0,1]],dtype=DTYPE)
-    lis=list(gates)
-    for i in range(len(gates)):
-        if(lis[i]=='H'):
-            aray=aray@H
+    """The 2x2 unitary of a flat H/T gate string."""
+
+    T = np.array(
+        [
+            [1, 0],
+            [0, np.exp(1j * np.pi / 4)],
+        ],
+        dtype=DTYPE,
+    )
+
+    result = np.eye(2, dtype=DTYPE)
+
+    for ch in gates:
+        if ch == "H":
+            result = result @ H
+        elif ch == "T":
+            result = result @ T
         else:
-            aray=aray@T
-    return aray
+            raise ValueError(f"Unknown gate character: {ch}")
+
+    return result
+
     # TODO: implement (multiply H / T for each char, starting from I).
     raise NotImplementedError("gates_to_unitary is not implemented yet")
 
 
 def invert_gates(gates: str) -> str:
-    """Inverse of a flat H/T word: reverse the gate order and invert each gate.
-    H^-1 = H; the {H, T} basis has no T-dagger, so T^-1 must be spelled as T^7.
-    """
-    sring=gates[::-1]
-    sring = sring.replace('T', 'TTTTTTT')
-    return sring
+    """Inverse of H/T word."""
+
+    result = ""
+
+    for ch in reversed(gates):
+        if ch == "H":
+            result += "H"
+        elif ch == "T":
+            result += "T" * 7
+        else:
+            raise ValueError(f"Unknown gate character: {ch}")
+
+    return result
     # TODO: implement.
     raise NotImplementedError("invert_gates is not implemented yet")
 
 def power_gates(base: str, k: int) -> str:
-    """The k-th power of a flat H/T word: base repeated k times. Negative k uses the
-    inverse word (invert_gates).
-    """
-    if(k>=0):
-        base=base*k
-    else:
-        base=invert_gates(base)*-k
-    return base
+    """The k-th power of a flat H/T word."""
+
+    if k >= 0:
+        return base * k
+
+    return invert_gates(base) * (-k)
     # TODO: implement.
     raise NotImplementedError("power_gates is not implemented yet")
 
-def approximate_in_ht(u: np.ndarray, error: float) -> str:
-    """Approximate a 2x2 unitary `u` by a flat H/T word (up to global phase) to the
-    angular tolerance `error` (smaller -> longer, more accurate).
+def ht_matrix(ch: str) -> np.ndarray:
+    """Return matrix for one H/T gate."""
 
-    Use decompose_2x2 to get the powers (k, l, m) with u ~= M1^k M2^l M1^m, then
-    assemble the word:
+    if ch == "H":
+        return (1 / np.sqrt(2)) * np.array(
+            [
+                [1, 1],
+                [1, -1],
+            ],
+            dtype=complex,
+        )
 
-        power_gates(M1_STR, k) + power_gates(M2_STR, l) + power_gates(M1_STR, m).
+    if ch == "T":
+        return np.array(
+            [
+                [1, 0],
+                [0, np.exp(1j * np.pi / 4)],
+            ],
+            dtype=complex,
+        )
+
+    raise ValueError(f"Unknown gate: {ch}")
+
+
+def gates_to_unitary(word: str) -> np.ndarray:
+    """Convert an H/T word into a 2x2 unitary.
+
+    Leftmost char = leftmost matrix factor.
+
+    Example:
+        word = "HTH" means H @ T @ H
     """
-    M1_STR=''
-    M2_STR=''
-    b=decompose_2x2(u,error)
-    sring=power_gates(M1_STR,b.k)+power_gates(M2_STR,b.l)+power_gates(M1_STR,b.m)
-    # TODO: implement using decompose_2x2 and power_gates.
-    raise NotImplementedError("approximate_in_ht is not implemented yet")
+
+    result = np.eye(2, dtype=complex)
+
+    for ch in word:
+        result = result @ ht_matrix(ch)
+
+    return result
+
+
+def error_up_to_phase_2x2(a: np.ndarray, b: np.ndarray) -> float:
+    """Compare two 2x2 matrices ignoring global phase."""
+
+    a = np.asarray(a, dtype=complex)
+    b = np.asarray(b, dtype=complex)
+
+    if not np.all(np.isfinite(a)):
+        return np.inf
+
+    if not np.all(np.isfinite(b)):
+        return np.inf
+
+    overlap = np.vdot(b, a)
+
+    if np.isclose(abs(overlap), 0.0):
+        return float(np.max(np.abs(a - b)))
+
+    phase = overlap / abs(overlap)
+
+    return float(np.max(np.abs(a - phase * b)))
+
+
+def approximate_in_ht(u: np.ndarray, error: float) -> str:
+    """Approximate a 2x2 unitary using H/T words.
+
+    Uses:
+        U ≈ M1^k M2^l M1^m
+    """
+
+    k, l, m = decompose_2x2(u, error)
+
+    return (
+        power_gates(M1_STR, k)
+        + power_gates(M2_STR, l)
+        + power_gates(M1_STR, m)
+    )
